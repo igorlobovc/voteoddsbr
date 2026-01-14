@@ -44,16 +44,13 @@ def _build_union_query(table_names: list[str]) -> str:
         parts.append(
             f"""
             SELECT
-              nome AS candidate_label,
+              TRIM(CAST(nome AS VARCHAR)) AS candidate_label,
               SUM(
-                COALESCE(
-                  TRY_CAST(votos AS BIGINT),
-                  0
-                )
+                COALESCE(TRY_CAST(votos AS BIGINT), 0)
               ) AS votos,
               COALESCE(TRY_CAST(ano AS INTEGER), {year}) AS year
             FROM {table}
-            WHERE nome IS NOT NULL AND nome <> ''
+            WHERE nome IS NOT NULL AND TRIM(nome) <> ''
             GROUP BY nome, ano
             """
         )
@@ -75,6 +72,7 @@ def _create_or_replace_view(con: duckdb.DuckDBPyConnection, table_names: list[st
         con.execute(empty_view_sql)
         return
 
+    print(f"✅ Creating or replacing view from {len(table_names)} staging tables.")
     union_sql = _build_union_query(table_names)
     view_sql = f"""
     CREATE OR REPLACE VIEW v_reelection_summary AS
@@ -103,6 +101,7 @@ def main() -> None:
     try:
         table_names = _list_staging_tables(con)
         logging.info("Found staging tables: %s", table_names)
+        logging.info("Number of staging tables found: %d", len(table_names))
         if not table_names:
             print("⚠️ No staging_raw_* tables found. Creating empty view.")
 
