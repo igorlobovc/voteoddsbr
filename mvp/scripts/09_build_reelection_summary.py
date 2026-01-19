@@ -92,6 +92,7 @@ def _create_or_replace_view(con: duckdb.DuckDBPyConnection, table_names: list[st
 
 
 def main() -> None:
+    CSV_OUT.parent.mkdir(parents=True, exist_ok=True)
     _configure_logging()
     logging.info("Starting reelection summary build.")
     logging.info("Connecting to DuckDB: %s", DB_PATH)
