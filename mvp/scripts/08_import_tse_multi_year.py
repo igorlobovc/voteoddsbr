@@ -47,7 +47,9 @@ def safe_read_csv(path):
 # Constants
 CHUNK_SIZE = 1_000_000
 YEARS = [2002, 2006, 2010, 2014, 2018, 2022, 2026]
-DATA_DIR = Path.home() / "SHRKVSCODE" / "polls_pipeline" / "data" / "tse"
+
+# --- Dynamic site_cache detection (auto-patch) ---
+DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "tse"
 if not DATA_DIR.exists():
     print(f"⚠️ Warning: DATA_DIR path not found: {DATA_DIR}")
 else:
@@ -55,6 +57,29 @@ else:
 print(f"🧠 Importer initialized for years: {YEARS}")
 if not any(DATA_DIR.rglob('*.csv')):
     print(f"⚠️ No CSV files found recursively in {DATA_DIR}. Please verify extracted data folders exist.")
+
+# --- Dynamic site_cache detection (auto-patch) ---
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[2]
+ARCHIVE_DIR = ROOT / "_archive"
+
+# Search across SHRKVSCODE for latest site_cache (polls_pipeline_* or _archive)
+possible_paths = list(ROOT.glob("polls_pipeline_*/data/site_cache")) + list(ARCHIVE_DIR.glob("**/site_cache"))
+LEGACY_SITE_CACHE = max(possible_paths, key=lambda p: p.stat().st_mtime) if possible_paths else None
+
+if LEGACY_SITE_CACHE and LEGACY_SITE_CACHE.exists():
+    print(f"🧭 Using detected legacy site_cache: {LEGACY_SITE_CACHE}")
+else:
+    print(f"⚠️ No legacy site_cache found under {ROOT}/polls_pipeline_* or {ARCHIVE_DIR}")
+
+# Replace DATA_DIR if empty or missing
+if not DATA_DIR.exists() or not any(DATA_DIR.rglob('*.csv')):
+    if LEGACY_SITE_CACHE and LEGACY_SITE_CACHE.exists():
+        DATA_DIR = LEGACY_SITE_CACHE
+        print(f"✅ Fallback: using JSON data from {DATA_DIR}")
+    else:
+        print("❌ No valid fallback site_cache found.")
+
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "elections_mvp.duckdb"
 print(f"🔍 DATA_DIR in use: {DATA_DIR}")
 
@@ -71,48 +96,48 @@ logging.basicConfig(
 # Helper: Fetch TSE CSV/ZIP from CKAN if missing (2014–2022, reproducible)
 def fetch_tse_from_ckan(year, dataset_type):
     """
-    Download TSE dataset ZIP/CSV for a given year/type from CKAN if not present in DATA_DIR.
-    Example dataset_type: 'votacao_candidato_munzona', 'consulta_cand'
+    Modernized: Directly fetches TSE datasets from the official CDN (no CKAN API).
+    Supports 2014–2022.
     """
-    # Only attempt for years 2014–2022 (CKAN API covers these best)
-    if year not in range(2014, 2023):
+    if year not in [2014, 2018, 2022]:
+        print(f"⏩ Skipping download for {year} — CDN only covers 2014–2022.")
         return
-    api_url = f"https://dadosabertos.tse.jus.br/api/3/action/package_search?q={dataset_type}+{year}"
-    try:
-        resp = requests.get(api_url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        results = data.get("result", {}).get("results", [])
-        if not results:
-            print(f"🌐 No CKAN package found for {dataset_type} {year}")
-            return
-        # Find all .zip or .csv resources
-        found = False
-        for pkg in results:
-            for r in pkg.get("resources", []):
-                url = r.get("url")
-                if not url:
+
+    # Correct nested folder structure per year
+    base_url = f"https://cdn.tse.jus.br/estatistica/sead/odsele/{dataset_type}/{dataset_type}_{year}.zip"
+
+    alt_patterns = [
+        base_url,
+        f"https://cdn.tse.jus.br/estatistica/sead/odsele/{dataset_type}/{dataset_type}_{year}_BR.zip",
+        f"https://cdn.tse.jus.br/estatistica/sead/odsele/{dataset_type}/{dataset_type}_{year}_1T.zip",
+        f"https://cdn.tse.jus.br/estatistica/sead/odsele/{dataset_type}/{dataset_type}_{year}_2T.zip",
+    ]
+
+    for url in alt_patterns:
+        dest = DATA_DIR / Path(url).name
+        try:
+            if dest.exists():
+                print(f"✅ File already present: {dest.name}")
+                return
+            print(f"🌐 Attempting download from: {url}")
+            with requests.get(url, stream=True, timeout=120) as r:
+                if r.status_code == 404:
+                    print(f"⚠️ Not found: {url}")
                     continue
-                if url.endswith(".zip") or url.endswith(".csv"):
-                    fname = url.split("/")[-1]
-                    dest = DATA_DIR / fname
-                    if dest.exists():
-                        print(f"🌐 {fname} already exists, skipping download.")
-                        continue
-                    # Download file
-                    print(f"🌐 Downloading {fname} from TSE CKAN...")
-                    with requests.get(url, stream=True, timeout=60) as rfile:
-                        rfile.raise_for_status()
-                        with open(dest, "wb") as f:
-                            for chunk in rfile.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                    print(f"✅ Downloaded {fname} to {dest}")
-                    found = True
-        if not found:
-            print(f"🌐 No downloadable .zip or .csv found for {dataset_type} {year}")
-    except Exception as e:
-        print(f"❌ CKAN fetch failed for {dataset_type} {year}: {e}")
+                r.raise_for_status()
+                with open(dest, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+            print(f"✅ Downloaded {dest.name} → {dest}")
+            return
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Request failed for {url}: {e}")
+            continue
+        except Exception as e:
+            print(f"❌ Unexpected error downloading {url}: {e}")
+            continue
+
+    print(f"❌ All fallback URLs failed for {dataset_type} {year}.")
 
 def extract_zip_files():
     """

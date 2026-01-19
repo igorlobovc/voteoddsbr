@@ -132,6 +132,3 @@ def main() -> None:
         con.close()
         logging.info("DuckDB connection closed.")
 
-
-if __name__ == "__main__":
-    main()
